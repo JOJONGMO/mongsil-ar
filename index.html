@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>몽실이 AR</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jua&family=Gothic+A1:wght@400;700;800&display=swap">
+<style>
+/* Layout: one-screen AR viewfinder — canvas fills the screen, a status card floats on top, an action dock with a shutter sits at the bottom. Ink-on-paper monochrome. */
+:root{
+  --paper:#ffffff;
+  --ink:#111111;
+  --ink-soft:#5c5c5c;
+  --line:#d6d6d6;
+  --wash:#f2f2f2;
+  --veil:rgba(17,17,17,.55);
+  --display:"Jua","Gothic A1",system-ui,sans-serif;
+  --body:"Gothic A1",system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --radius:18px;
+  color-scheme:light;
+}
+html,body{height:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--body);overflow:hidden;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+.app{position:relative;height:100%;overflow:hidden;background:var(--paper)}
+#stage{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+#stage.dragging{cursor:grabbing}
+video,#fileIn{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+
+/* top status card */
+.top{position:absolute;top:0;left:0;right:0;padding-block:12px 0;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));pointer-events:none;display:flex;flex-direction:column;gap:8px}
+.card{pointer-events:auto;background:var(--paper);border:2px solid var(--ink);border-radius:var(--radius);padding:12px 14px;display:flex;flex-direction:column;gap:10px;max-width:520px;width:100%;margin-inline:auto;box-shadow:4px 4px 0 var(--ink)}
+.row{display:flex;align-items:center;gap:10px;min-width:0}
+.name{font-family:var(--display);font-size:24px;line-height:1;background:none;border:0;padding:0;color:var(--ink);cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.name:focus-visible,button:focus-visible,label:focus-visible{outline:3px solid var(--ink);outline-offset:3px;border-radius:8px}
+#nameIn{font-family:var(--display);font-size:22px;border:0;border-bottom:2px solid var(--ink);background:transparent;color:var(--ink);width:9em;padding:0 0 2px;outline:none}
+.chip{flex:none;font-size:12px;font-weight:800;letter-spacing:.04em;background:var(--ink);color:var(--paper);border-radius:999px;padding:4px 9px;font-variant-numeric:tabular-nums}
+.xp{margin-left:auto;flex:1;max-width:140px;min-width:70px;display:flex;flex-direction:column;gap:3px}
+.xp small{font-size:10px;font-weight:700;color:var(--ink-soft);text-align:right;font-variant-numeric:tabular-nums;letter-spacing:.03em}
+.bar{height:8px;border:1.5px solid var(--ink);border-radius:99px;overflow:hidden;background:var(--paper)}
+.bar i{display:block;height:100%;width:50%;background:var(--ink);border-radius:99px;transition:width .4s ease}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.stat{display:flex;flex-direction:column;gap:4px;min-width:0}
+.stat .lab{display:flex;justify-content:space-between;font-size:11px;font-weight:800;letter-spacing:.02em}
+.stat .lab b{font-weight:700;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.stat.low .bar i{background:repeating-linear-gradient(-45deg,var(--ink) 0 4px,var(--paper) 4px 7px)}
+.stat.low .lab span::after{content:" !";}
+.hint{pointer-events:auto;align-self:center;font-size:12px;font-weight:700;background:var(--paper);border:1.5px solid var(--ink);border-radius:999px;padding:6px 12px;text-align:center;max-width:100%}
+
+/* bubble */
+#bubble{position:absolute;left:0;top:0;pointer-events:none;background:var(--paper);border:2px solid var(--ink);border-radius:14px;padding:7px 11px;font-family:var(--display);font-size:16px;white-space:nowrap;transform-origin:50% 100%;transition:opacity .2s}
+#bubble::after{content:"";position:absolute;left:50%;bottom:-8px;width:12px;height:12px;background:var(--paper);border-right:2px solid var(--ink);border-bottom:2px solid var(--ink);transform:translateX(-50%) rotate(45deg)}
+
+/* dock */
+.dock{position:absolute;left:0;right:0;bottom:0;padding-block:0 14px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;justify-content:center;pointer-events:none}
+.dock-in{pointer-events:auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) auto repeat(2,minmax(0,1fr));align-items:end;gap:8px;width:100%;max-width:520px}
+.act{appearance:none;background:var(--paper);color:var(--ink);border:2px solid var(--ink);border-radius:16px;padding:9px 4px 8px;display:flex;flex-direction:column;align-items:center;gap:4px;font:800 12px/1 var(--body);cursor:pointer;box-shadow:3px 3px 0 var(--ink);transition:transform .08s,box-shadow .08s}
+.act svg{width:24px;height:24px}
+.act:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--ink)}
+.act[disabled]{opacity:.35;cursor:not-allowed;box-shadow:none}
+.act.on{background:var(--ink);color:var(--paper)}
+.shutter{appearance:none;width:72px;height:72px;border-radius:50%;border:3px solid var(--ink);background:var(--paper);display:grid;place-items:center;cursor:pointer;padding:0;margin-bottom:2px;box-shadow:3px 3px 0 var(--ink)}
+.shutter span{width:54px;height:54px;border-radius:50%;background:var(--ink);display:grid;place-items:center;color:var(--paper)}
+.shutter svg{width:24px;height:24px}
+.shutter:active{transform:translate(3px,3px);box-shadow:none}
+
+/* toast + sheets */
+#toast{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%) scale(.9);background:var(--ink);color:var(--paper);font-family:var(--display);font-size:22px;padding:12px 20px;border-radius:16px;opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;text-align:center;max-width:calc(100% - 32px)}
+#toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+#flash{position:absolute;inset:0;background:var(--paper);opacity:0;pointer-events:none;transition:opacity .35s}
+.sheet{position:absolute;inset:0;background:var(--veil);display:flex;align-items:flex-end;justify-content:center;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px;z-index:5}
+.sheet-in{background:var(--paper);border:2px solid var(--ink);border-radius:22px;padding:20px;width:100%;max-width:440px;display:flex;flex-direction:column;gap:12px;box-shadow:5px 5px 0 var(--ink)}
+.sheet h2{margin:0;font-family:var(--display);font-weight:400;font-size:22px;text-wrap:balance}
+.sheet p{margin:0;font-size:14px;line-height:1.6;color:var(--ink-soft)}
+.btn{appearance:none;display:flex;align-items:center;justify-content:center;gap:8px;font:800 15px/1 var(--body);border:2px solid var(--ink);border-radius:14px;padding:14px;cursor:pointer;background:var(--paper);color:var(--ink);text-align:center}
+.btn.primary{background:var(--ink);color:var(--paper)}
+.btn svg{width:20px;height:20px}
+.note{font-size:12px!important;border-top:1.5px dashed var(--line);padding-top:10px}
+#shotImg{width:100%;border:2px solid var(--ink);border-radius:12px;display:block}
+
+@media (max-width:360px){.act{font-size:11px}.act svg{width:20px;height:20px}.shutter{width:62px;height:62px}.shutter span{width:46px;height:46px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+
+<div class="app" id="app">
+  <canvas id="stage" aria-label="몽실이가 있는 AR 화면. 탭하면 쓰다듬고, 끌어서 옮길 수 있어요."></canvas>
+  <video id="video" playsinline muted></video>
+  <input type="file" id="fileIn" accept="image/*" capture="environment">
+
+  <div class="top">
+    <div class="card">
+      <div class="row">
+        <button class="name" id="nameBtn" title="이름 바꾸기">몽실이</button>
+        <input id="nameIn" maxlength="10" hidden aria-label="새 이름">
+        <span class="chip" id="lvChip">알</span>
+        <div class="xp">
+          <div class="bar"><i id="xpBar"></i></div>
+          <small id="xpTxt">0 / 50 XP</small>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat" id="stFood"><div class="lab"><span>포만감</span><b>70</b></div><div class="bar"><i></i></div></div>
+        <div class="stat" id="stMood"><div class="lab"><span>기분</span><b>70</b></div><div class="bar"><i></i></div></div>
+        <div class="stat" id="stEnergy"><div class="lab"><span>에너지</span><b>80</b></div><div class="bar"><i></i></div></div>
+      </div>
+    </div>
+    <div class="hint" id="hint">알을 톡톡 두드려 깨워주세요 · 0/5</div>
+  </div>
+
+  <div id="bubble" style="opacity:0">안녕!</div>
+  <div id="flash"></div>
+  <div id="toast"></div>
+
+  <div class="dock">
+    <div class="dock-in">
+      <button class="act" id="bFeed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3.5c-1.2 0-2 .8-2.6 1.8L4 15c-1.2 2.1.3 4.5 2.7 4.5h10.6c2.4 0 3.9-2.4 2.7-4.5l-5.4-9.7C14 4.3 13.2 3.5 12 3.5Z"/><path d="M8 19.5v-4h8v4" fill="currentColor"/></svg>먹이</button>
+      <button class="act" id="bPlay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8.5"/><path d="M4 10.5c5 2.5 11 2.5 16 0M5.5 16.5c4-1.8 9-1.8 13 0"/></svg>놀기</button>
+      <button class="shutter" id="bShot" aria-label="사진 찍기"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l1.5-2.5h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span></button>
+      <button class="act" id="bSleep"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M19 14.5A7.5 7.5 0 0 1 9.5 5a7.5 7.5 0 1 0 9.5 9.5Z"/></svg><span id="sleepLab">재우기</span></button>
+      <button class="act" id="bCam"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3"/><circle cx="12" cy="12" r="3"/></svg><span id="camLab">카메라</span></button>
+    </div>
+  </div>
+
+  <div class="sheet" id="camSheet" hidden>
+    <div class="sheet-in" role="dialog" aria-labelledby="camTitle">
+      <h2 id="camTitle">사진 위에 몽실이를 올려볼까요?</h2>
+      <p id="camDesc">이 화면에서는 실시간 카메라가 막혀 있어요. 대신 지금 사진을 찍으면 그 장면 속에 몽실이가 나타나요.</p>
+      <label class="btn primary" for="fileIn" id="pickBtn" tabindex="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 8h3l1.5-2.5h7L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>사진 찍기 · 고르기</label>
+      <button class="btn" id="clearBg" hidden>원래 AR 바닥으로 돌아가기</button>
+      <button class="btn" id="closeSheet">닫기</button>
+      <p class="note">실시간 카메라와 폰을 돌리면 몽실이가 그 자리에 머무는 AR 모드는, 이 파일을 내 웹사이트(예: GitHub Pages)에 올려 휴대폰으로 열면 작동해요.</p>
+    </div>
+  </div>
+
+  <div class="sheet" id="shotSheet" hidden>
+    <div class="sheet-in" role="dialog" aria-labelledby="shotTitle">
+      <h2 id="shotTitle">찰칵! 기념사진</h2>
+      <img id="shotImg" alt="몽실이 기념사진">
+      <p>사진을 길게 눌러 저장하세요.</p>
+      <button class="btn primary" id="closeShot">닫기</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const cv = $('#stage'), ctx = cv.getContext('2d');
+const video = $('#video');
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const INK = '#111111', PAPER = '#ffffff', CHEEK = '#d4d4d4';
+const STAGES = ['알', '아기', '어린이', '어른'];
+const SCALE = [0.95, 0.78, 1.0, 1.25];
+
+/* ---------- save data ---------- */
+const KEY = 'mongsil-ar-v1';
+const DEF = { name: '몽실이', level: 1, xp: 0, stage: 0, taps: 0, food: 70, mood: 70, energy: 80, sleeping: false, last: Date.now() };
+let S;
+try { S = Object.assign({}, DEF, JSON.parse(localStorage.getItem(KEY) || 'null') || {}); } catch (e) { S = Object.assign({}, DEF); }
+function save() { try { S.last = Date.now(); localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const need = l => 30 + l * 20;
+const stageFor = l => (l <= 2 ? 1 : l <= 5 ? 2 : 3);
+
+function tick(sec) {
+  if (S.stage === 0) return;
+  const m = sec / 60;
+  if (S.sleeping) {
+    S.energy += 3 * m; S.food -= 0.5 * m; S.mood -= 0.15 * m;
+  } else {
+    S.food -= 1.2 * m; S.energy -= 0.6 * m;
+    S.mood -= (S.food < 20 ? 1.6 : 0.7) * m;
+  }
+  S.food = clamp(S.food, 0, 100); S.mood = clamp(S.mood, 0, 100); S.energy = clamp(S.energy, 0, 100);
+}
+// catch up time while away (max 12h)
+tick(Math.min(720, Math.max(0, (Date.now() - S.last) / 60000)) * 60);
+let wokeWhileAway = false;
+if (S.sleeping && S.energy >= 100) { S.sleeping = false; wokeWhileAway = true; }
+
+/* ---------- canvas sizing ---------- */
+let W = 0, H = 0, DPR = 1;
+const pet = { wx: 0, wy: 0, placed: false };
+function R() { return clamp(Math.min(W, H) * 0.12, 34, 88) * SCALE[S.stage]; }
+function resize() {
+  const r = cv.getBoundingClientRect();
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = r.width; H = r.height;
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (!pet.placed) { pet.wx = W / 2; pet.wy = H * 0.66; pet.placed = true; }
+  if (!gyro.on) { pet.wx = clamp(pet.wx, 40, W - 40); pet.wy = clamp(pet.wy, H * 0.4, H - 120); }
+}
+
+/* ---------- gyro (world-anchored AR when live camera) ---------- */
+const gyro = { on: false, base: null, dx: 0, dy: 0, tx: 0, ty: 0 };
+const ppd = () => W / 55;
+function onOrient(e) {
+  if (e.alpha == null || e.beta == null) return;
+  if (!gyro.base) gyro.base = { a: e.alpha, b: e.beta };
+  let da = e.alpha - gyro.base.a;
+  if (da > 180) da -= 360; if (da < -180) da += 360;
+  gyro.tx = da; gyro.ty = e.beta - gyro.base.b;
+  gyro.on = true;
+}
+function requestGyro() {
+  try {
+    const D = window.DeviceOrientationEvent;
+    if (D && typeof D.requestPermission === 'function') {
+      return D.requestPermission().then(p => { if (p === 'granted') addEventListener('deviceorientation', onOrient); }).catch(() => {});
+    }
+    if (D) addEventListener('deviceorientation', onOrient);
+  } catch (e) {}
+  return Promise.resolve();
+}
+function stopGyro() { removeEventListener('deviceorientation', onOrient); recenterGyro(); gyro.on = false; }
+function recenterGyro() {
+  const p = petScreen();
+  gyro.base = null; gyro.dx = gyro.dy = gyro.tx = gyro.ty = 0;
+  pet.wx = p.x; pet.wy = p.y;
+}
+function petScreen() {
+  let x = pet.wx, y = pet.wy;
+  if (gyro.on) { x += gyro.dx * ppd(); y += gyro.dy * ppd(); }
+  return { x, y };
+}
+
+/* ---------- animation state ---------- */
+const A = {
+  t: 0, blinkAt: 2, blink: 0, wobble: 0, happyUntil: 0, chomp: 0,
+  jump: null, squashKick: 0, flash: 0,
+  parts: [], foods: [], ball: null, cracks: []
+};
+function makeCracks() {
+  A.cracks = [];
+  for (let i = 0; i < 5; i++) {
+    const pts = []; const sx = (Math.random() - 0.5) * 0.9; let x = sx, y = -1.2 + Math.random() * 0.5;
+    pts.push([x, y]);
+    for (let k = 0; k < 4; k++) { x += (k % 2 ? 0.14 : -0.14) + (Math.random() - 0.5) * 0.06; y += 0.12 + Math.random() * 0.06; pts.push([x, y]); }
+    A.cracks.push(pts);
+  }
+}
+makeCracks();
+
+/* ---------- speech ---------- */
+const bubble = $('#bubble');
+let speech = { text: '', until: 0 };
+function say(text, sec = 2.2) { speech = { text, until: A.t + sec }; bubble.textContent = text; }
+const pick = a => a[(Math.random() * a.length) | 0];
+
+/* ---------- particles ---------- */
+function burst(kind, x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const ang = -Math.PI / 2 + (Math.random() - 0.5) * 1.8;
+    const sp = 60 + Math.random() * 110;
+    A.parts.push({ kind, x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0, max: 0.9 + Math.random() * 0.6, s: 0.7 + Math.random() * 0.6, rot: Math.random() * 6 });
+  }
+}
+
+/* ---------- actions ---------- */
+function toast(t) { const el = $('#toast'); el.textContent = t; el.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 1700); }
+function addXp(n) {
+  if (S.stage === 0) return;
+  S.xp += n;
+  let leveled = false;
+  while (S.xp >= need(S.level)) { S.xp -= need(S.level); S.level++; leveled = true; }
+  if (leveled) {
+    const ns = stageFor(S.level);
+    const p = petScreen();
+    if (ns !== S.stage) {
+      S.stage = ns; A.flash = 1; burst('star', p.x, p.y - R(), 18);
+      toast(`${S.name}가 ${STAGES[ns]}(으)로 자랐어요!`);
+      say(pick(['나 컸지?', '키가 쑥!', '몸이 근질근질해']), 2.6);
+    } else {
+      burst('star', p.x, p.y - R(), 10);
+      toast(`레벨 업! Lv.${S.level}`);
+    }
+  }
+  save(); syncUI();
+}
+function hatch() {
+  S.stage = 1; S.level = 1; S.xp = 0; S.food = 80; S.mood = 90; S.energy = 80;
+  A.flash = 1; A.happyUntil = A.t + 3;
+  const p = petScreen();
+  burst('shell', p.x, p.y - R(), 14); burst('star', p.x, p.y - R(), 10);
+  toast('알이 깨어났어요!');
+  setTimeout(() => say(`안녕! 나는 ${S.name}야`, 3), 500);
+  save(); syncUI();
+}
+function tapPet() {
+  const p = petScreen();
+  if (S.stage === 0) {
+    S.taps++; A.wobble = 1;
+    burst('dust', p.x, p.y - R() * 0.4, 4);
+    if (S.taps >= 5) hatch(); else { save(); syncUI(); }
+    return;
+  }
+  if (S.sleeping) { say('쿨... 쿨...', 1.5); return; }
+  if (A.t - (tapPet._last || -9) < 0.45) return;
+  tapPet._last = A.t;
+  S.mood = clamp(S.mood + 5, 0, 100); A.happyUntil = A.t + 1.6; A.squashKick = 1;
+  burst('heart', p.x, p.y - R() * 1.6, 3);
+  if (Math.random() < 0.35) say(pick(['헤헤', '간지러워!', '좋아좋아', '또 해줘', '♡']), 1.6);
+  addXp(2);
+}
+function feed() {
+  if (S.stage === 0) return;
+  if (S.sleeping) { say('쿨쿨... 자는 중이야', 1.8); return; }
+  if (S.food >= 95) { say(pick(['배불러...', '더는 못 먹어!']), 1.8); return; }
+  if (A.foods.length) return;
+  const p = petScreen();
+  A.foods.push({ x: p.x + (Math.random() - 0.5) * 20, y: -40, vy: 0, rot: (Math.random() - 0.5) * 0.6, target: p.y - R() * 0.9 });
+  say(pick(['밥이다!', '냠냠 준비!', '오니기리!']), 1.4);
+}
+function eat() {
+  const p = petScreen();
+  S.food = clamp(S.food + 25, 0, 100); S.mood = clamp(S.mood + 6, 0, 100);
+  A.chomp = 1.1; A.happyUntil = A.t + 1.8;
+  burst('crumb', p.x, p.y - R() * 0.8, 8);
+  setTimeout(() => say(pick(['맛있다!', '냠냠 최고', '한 개 더?']), 1.6), 700);
+  addXp(8);
+}
+function play() {
+  if (S.stage === 0) return;
+  if (S.sleeping) { say('지금은 졸려...', 1.6); return; }
+  if (S.energy < 15) { say('힘이 없어... 재워줘', 2); return; }
+  if (A.ball) return;
+  A.ball = { t: 0, dur: 2.7 };
+  A.jump = { t: 0, dur: 2.7, n: 3 };
+  say(pick(['공놀이다!', '받아라!', '신난다!']), 1.4);
+}
+function endPlay() {
+  S.mood = clamp(S.mood + 20, 0, 100); S.energy = clamp(S.energy - 12, 0, 100); S.food = clamp(S.food - 5, 0, 100);
+  A.happyUntil = A.t + 2;
+  say(pick(['재밌었어!', '한 판 더!', '헥헥, 최고야']), 1.8);
+  addXp(12);
+}
+function toggleSleep() {
+  if (S.stage === 0) return;
+  S.sleeping = !S.sleeping;
+  say(S.sleeping ? '잘 자...' : pick(['잘 잤다!', '으아암~']), 1.6);
+  save(); syncUI();
+}
+
+/* ---------- UI sync ---------- */
+function setStat(id, v) {
+  const el = $(id); el.querySelector('b').textContent = Math.round(v);
+  el.querySelector('i').style.width = v + '%';
+  el.classList.toggle('low', v < 25 && S.stage > 0);
+}
+function syncUI() {
+  $('#nameBtn').textContent = S.name;
+  $('#lvChip').textContent = S.stage === 0 ? '알' : `Lv.${S.level} · ${STAGES[S.stage]}`;
+  const nd = need(S.level);
+  $('#xpBar').style.width = (S.stage === 0 ? S.taps / 5 * 100 : S.xp / nd * 100) + '%';
+  $('#xpTxt').textContent = S.stage === 0 ? `부화 ${S.taps} / 5` : `${Math.floor(S.xp)} / ${nd} XP`;
+  setStat('#stFood', S.food); setStat('#stMood', S.mood); setStat('#stEnergy', S.energy);
+  const egg = S.stage === 0;
+  ['#bFeed', '#bPlay', '#bSleep'].forEach(id => $(id).disabled = egg);
+  $('#bSleep').classList.toggle('on', S.sleeping);
+  $('#sleepLab').textContent = S.sleeping ? '깨우기' : '재우기';
+  const hint = $('#hint');
+  if (egg) { hint.hidden = false; hint.textContent = `알을 톡톡 두드려 깨워주세요 · ${S.taps}/5`; }
+  else if (!bg.live && !bg.img && !syncUI._hintDone) { hint.hidden = false; hint.textContent = '카메라를 켜면 내 방에 나타나요 · 끌어서 옮기기'; }
+  else hint.hidden = true;
+}
+
+/* ---------- background: live camera / photo / AR floor ---------- */
+const bg = { live: false, img: null, stream: null };
+function drawCover(src, sw, sh) {
+  const s = Math.max(W / sw, H / sh), w = sw * s, h = sh * s;
+  ctx.drawImage(src, (W - w) / 2, (H - h) / 2, w, h);
+}
+function drawFloor() {
+  ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
+  const hz = H * 0.42, vx = W / 2;
+  // dot field above horizon
+  ctx.fillStyle = '#e4e4e4';
+  for (let y = 18; y < hz - 8; y += 22) for (let x = 11 + ((y / 22) % 2) * 11; x < W; x += 22) { ctx.beginPath(); ctx.arc(x, y, 1.1, 0, 7); ctx.fill(); }
+  ctx.strokeStyle = '#dcdcdc'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, hz); ctx.lineTo(W, hz); ctx.stroke();
+  // perspective floor grid
+  const n = 14;
+  for (let i = -n; i <= n; i++) { ctx.beginPath(); ctx.moveTo(vx + i * 6, hz); ctx.lineTo(vx + i * W * 0.22, H + 40); ctx.stroke(); }
+  for (let k = 1; k < 14; k++) { const y = hz + (H - hz) * Math.pow(k / 13, 1.9); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+}
+async function startLive() {
+  const gp = requestGyro(); // must start inside the tap for iOS
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('no camera api');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    video.srcObject = stream; await video.play();
+    bg.stream = stream; bg.live = true; bg.img = null;
+    $('#bCam').classList.add('on'); $('#camLab').textContent = '끄기';
+    await gp; recenterGyro();
+    say(pick(['여기가 네 방이야?', '우와, 진짜 세상이다!']), 2.2);
+    syncUI();
+  } catch (e) {
+    stopGyro();
+    openCamSheet();
+  }
+}
+function stopLive() {
+  if (bg.stream) bg.stream.getTracks().forEach(t => t.stop());
+  bg.stream = null; bg.live = false; video.srcObject = null;
+  stopGyro();
+  $('#bCam').classList.remove('on'); $('#camLab').textContent = '카메라';
+  syncUI();
+}
+function openCamSheet() { $('#clearBg').hidden = !bg.img; $('#camSheet').hidden = false; $('#pickBtn').focus(); }
+$('#bCam').addEventListener('click', () => { bg.live ? stopLive() : startLive(); });
+$('#closeSheet').addEventListener('click', () => $('#camSheet').hidden = true);
+$('#clearBg').addEventListener('click', () => { bg.img = null; $('#camSheet').hidden = true; syncUI(); });
+$('#pickBtn').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('#fileIn').click(); } });
+$('#fileIn').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const url = URL.createObjectURL(f); const img = new Image();
+  img.onload = () => { bg.img = img; $('#camSheet').hidden = true; syncUI._hintDone = true; syncUI(); A.happyUntil = A.t + 2; say(pick(['여기 어디야?', '새로운 곳이다!', '여기 마음에 들어']), 2); };
+  img.src = url; e.target.value = '';
+});
+
+/* ---------- drawing the creature ---------- */
+function blob(x, y, rx, ry) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); }
+function inkFill(lw) { ctx.fillStyle = PAPER; ctx.fill(); ctx.lineWidth = lw; ctx.strokeStyle = INK; ctx.stroke(); }
+
+function mood() {
+  if (S.sleeping) return 'sleep';
+  if (A.t < A.happyUntil) return 'happy';
+  if (S.food < 22) return 'hungry';
+  if (S.mood < 25) return 'sad';
+  if (S.energy < 18) return 'tired';
+  if (S.mood > 75) return 'smile';
+  return 'normal';
+}
+
+function drawEgg(r, lw) {
+  const ry = r * 1.0, rx = r * 0.78;
+  blob(0, -ry, rx, ry); inkFill(lw);
+  ctx.fillStyle = INK;
+  [[-0.35, -1.35, 0.1], [0.3, -0.75, 0.13], [-0.2, -0.45, 0.07], [0.38, -1.5, 0.06]].forEach(([a, b, c]) => { blob(a * r, b * r, c * r, c * r * 0.85); ctx.fill(); });
+  ctx.lineWidth = lw * 0.8; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (let i = 0; i < Math.min(S.taps, A.cracks.length); i++) {
+    ctx.beginPath(); A.cracks[i].forEach(([px, py], k) => k ? ctx.lineTo(px * r * 0.8, py * r) : ctx.moveTo(px * r * 0.8, py * r)); ctx.stroke();
+  }
+}
+
+function drawFace(r, lw, m) {
+  const ey = -r * 1.0, ex = r * 0.34, er = r * 0.095;
+  ctx.lineWidth = lw * 0.9; ctx.lineCap = 'round'; ctx.strokeStyle = INK; ctx.fillStyle = INK;
+  // cheeks
+  ctx.fillStyle = CHEEK; blob(-r * 0.6, -r * 0.78, r * 0.14, r * 0.08); ctx.fill(); blob(r * 0.6, -r * 0.78, r * 0.14, r * 0.08); ctx.fill();
+  ctx.fillStyle = INK;
+  const blinking = A.blink > 0;
+  const eye = (sx) => {
+    const x = sx * ex;
+    if (m === 'sleep') { ctx.beginPath(); ctx.arc(x, ey - er * 0.4, er * 1.2, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke(); return; }
+    if (m === 'happy') { ctx.beginPath(); ctx.arc(x, ey + er * 0.8, er * 1.3, 1.15 * Math.PI, 1.85 * Math.PI); ctx.stroke(); return; }
+    if (m === 'tired' || blinking) { ctx.beginPath(); ctx.moveTo(x - er * 1.2, ey); ctx.lineTo(x + er * 1.2, ey); ctx.stroke(); return; }
+    blob(x, ey, er, er * 1.2); ctx.fill();
+    ctx.fillStyle = PAPER; blob(x + er * 0.35, ey - er * 0.45, er * 0.35, er * 0.35); ctx.fill(); ctx.fillStyle = INK;
+    if (m === 'sad') { ctx.beginPath(); ctx.moveTo(x - er * 1.4 * sx, ey - er * 2.4); ctx.lineTo(x + er * 1.2 * sx, ey - er * 1.9); ctx.stroke(); }
+  };
+  eye(-1); eye(1);
+  // mouth
+  const my = -r * 0.72;
+  ctx.beginPath();
+  if (A.chomp > 0) {
+    const o = Math.abs(Math.sin(A.chomp * 14)) * r * 0.1 + r * 0.02;
+    blob(0, my, r * 0.09, o); ctx.fill();
+  } else if (m === 'happy') {
+    ctx.moveTo(-r * 0.12, my - r * 0.03); ctx.quadraticCurveTo(0, my + r * 0.2, r * 0.12, my - r * 0.03); ctx.closePath(); ctx.fill();
+  } else if (m === 'sleep') {
+    blob(0, my, r * 0.04, r * 0.05); ctx.fill();
+  } else if (m === 'sad') {
+    ctx.arc(0, my + r * 0.08, r * 0.09, 1.15 * Math.PI, 1.85 * Math.PI); ctx.stroke();
+  } else if (m === 'hungry') {
+    ctx.moveTo(-r * 0.12, my); for (let i = 1; i <= 4; i++) ctx.lineTo(-r * 0.12 + i * r * 0.06, my + (i % 2 ? r * 0.04 : 0)); ctx.stroke();
+  } else {
+    ctx.moveTo(-r * 0.08, my - r * 0.01); ctx.quadraticCurveTo(-r * 0.04, my + r * 0.05, 0, my); ctx.quadraticCurveTo(r * 0.04, my + r * 0.05, r * 0.08, my - r * 0.01); ctx.stroke();
+  }
+  if (m === 'hungry') { // sweat drop
+    ctx.beginPath(); const sx = r * 0.78, sy = -r * 1.35;
+    ctx.moveTo(sx, sy - r * 0.16); ctx.quadraticCurveTo(sx + r * 0.1, sy, sx, sy + r * 0.06); ctx.quadraticCurveTo(sx - r * 0.1, sy, sx, sy - r * 0.16);
+    ctx.fillStyle = PAPER; ctx.fill(); ctx.lineWidth = lw * 0.7; ctx.stroke(); ctx.fillStyle = INK;
+  }
+}
+
+function drawCreature(r, lw, m) {
+  const st = S.stage;
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  // tail (adult)
+  if (st === 3) {
+    ctx.beginPath(); ctx.moveTo(r * 0.85, -r * 0.45); ctx.quadraticCurveTo(r * 1.45, -r * 0.5, r * 1.3, -r * 1.05);
+    ctx.lineWidth = lw * 2.6; ctx.strokeStyle = INK; ctx.stroke(); ctx.lineWidth = lw * 1.1; ctx.strokeStyle = PAPER; ctx.stroke();
+    blob(r * 1.3, -r * 1.1, r * 0.13, r * 0.13); inkFill(lw);
+  }
+  // ears
+  if (st === 2) { [-1, 1].forEach(s => { blob(s * r * 0.58, -r * 1.72, r * 0.24, r * 0.24); inkFill(lw); }); }
+  if (st === 3) {
+    [-1, 1].forEach(s => {
+      ctx.beginPath(); ctx.moveTo(s * r * 0.25, -r * 1.7); ctx.quadraticCurveTo(s * r * 0.75, -r * 2.45, s * r * 0.85, -r * 1.45); ctx.closePath(); inkFill(lw);
+      ctx.beginPath(); ctx.moveTo(s * r * 0.45, -r * 1.75); ctx.quadraticCurveTo(s * r * 0.7, -r * 2.1, s * r * 0.72, -r * 1.65); ctx.fillStyle = CHEEK; ctx.fill();
+    });
+  }
+  // feet
+  [-1, 1].forEach(s => { blob(s * r * 0.45, -r * 0.08, r * 0.24, r * 0.13); inkFill(lw); });
+  // arms
+  const wave = (m === 'happy' ? Math.sin(A.t * 14) * 0.25 : 0);
+  [-1, 1].forEach(s => { ctx.save(); ctx.translate(s * r * 0.98, -r * 0.8); ctx.rotate(s * (0.5 + wave)); blob(0, 0, r * 0.12, r * 0.22); inkFill(lw); ctx.restore(); });
+  // body
+  ctx.beginPath();
+  ctx.moveTo(0, -r * 1.92);
+  ctx.bezierCurveTo(r * 0.72, -r * 1.92, r * 1.08, -r * 1.35, r * 1.06, -r * 0.8);
+  ctx.bezierCurveTo(r * 1.04, -r * 0.25, r * 0.65, -r * 0.05, 0, -r * 0.05);
+  ctx.bezierCurveTo(-r * 0.65, -r * 0.05, -r * 1.04, -r * 0.25, -r * 1.06, -r * 0.8);
+  ctx.bezierCurveTo(-r * 1.08, -r * 1.35, -r * 0.72, -r * 1.92, 0, -r * 1.92);
+  inkFill(lw);
+  // belly mark (kid/adult)
+  if (st >= 2) { ctx.beginPath(); ctx.arc(0, -r * 0.42, r * 0.28, 1.1 * Math.PI, 1.9 * Math.PI); ctx.lineWidth = lw * 0.6; ctx.strokeStyle = '#9a9a9a'; ctx.stroke(); }
+  // sprout (baby) / tuft (adult)
+  if (st === 1) {
+    ctx.beginPath(); ctx.moveTo(0, -r * 1.9); ctx.quadraticCurveTo(-r * 0.05, -r * 2.2, r * 0.08, -r * 2.32); ctx.lineWidth = lw; ctx.strokeStyle = INK; ctx.stroke();
+    ctx.save(); ctx.translate(r * 0.08, -r * 2.32); ctx.rotate(-0.6 + Math.sin(A.t * 3) * 0.15); blob(r * 0.13, 0, r * 0.15, r * 0.08); inkFill(lw * 0.9); ctx.restore();
+  }
+  if (st === 3) {
+    ctx.beginPath(); ctx.moveTo(-r * 0.15, -r * 1.88); ctx.quadraticCurveTo(-r * 0.05, -r * 2.25, r * 0.12, -r * 2.05); ctx.quadraticCurveTo(r * 0.05, -r * 1.98, r * 0.12, -r * 1.88);
+    ctx.lineWidth = lw; ctx.strokeStyle = INK; ctx.stroke();
+  }
+  drawFace(r, lw, m);
+}
+
+function drawPet() {
+  const p = petScreen(); const r = R(); const lw = Math.max(2.5, r * 0.075);
+  let jy = 0, sq = 0;
+  if (A.jump) {
+    const ph = (A.jump.t / A.jump.dur) * A.jump.n; const f = ph % 1;
+    jy = Math.sin(f * Math.PI) * r * 0.9; sq = f < 0.12 || f > 0.88 ? 0.12 : -0.06;
+  }
+  const bobAmp = reduced ? 0.01 : (S.sleeping ? 0.025 : 0.05);
+  const bob = Math.sin(A.t * (S.sleeping ? 1.4 : 2.6)) * r * bobAmp;
+  sq += Math.sin(A.t * (S.sleeping ? 1.4 : 2.6) * 2) * (reduced ? 0.005 : 0.025) + A.squashKick * 0.12 * Math.sin(A.squashKick * 9);
+  // shadow + AR ring
+  ctx.save();
+  const shS = 1 - jy / (r * 2.4);
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; blob(p.x, p.y, r * 1.05 * shS, r * 0.24 * shS); ctx.fill();
+  if (drag.active || A.t < 2.5) {
+    ctx.setLineDash([6, 6]); ctx.lineDashOffset = -A.t * 20; ctx.strokeStyle = bg.live || bg.img ? PAPER : INK; ctx.lineWidth = 2;
+    blob(p.x, p.y, r * 1.5, r * 0.38); ctx.stroke(); ctx.setLineDash([]);
+  }
+  ctx.restore();
+  // body
+  ctx.save();
+  ctx.translate(p.x, p.y - jy + bob);
+  if (S.stage === 0) ctx.rotate(Math.sin(A.t * 30) * 0.18 * A.wobble + Math.sin(A.t * 1.3) * 0.03);
+  ctx.scale(1 + sq, 1 - sq);
+  if (S.stage === 0) drawEgg(r, lw); else drawCreature(r, lw, mood());
+  ctx.restore();
+  return { x: p.x, y: p.y - jy + bob, r };
+}
+
+/* ---------- props & particles ---------- */
+function drawOnigiri(x, y, s, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  ctx.beginPath(); ctx.moveTo(0, -s); ctx.quadraticCurveTo(s * 0.25, -s * 0.95, s * 0.95, s * 0.55); ctx.quadraticCurveTo(s, s * 0.85, s * 0.6, s * 0.85);
+  ctx.lineTo(-s * 0.6, s * 0.85); ctx.quadraticCurveTo(-s, s * 0.85, -s * 0.95, s * 0.55); ctx.quadraticCurveTo(-s * 0.25, -s * 0.95, 0, -s); ctx.closePath();
+  ctx.fillStyle = PAPER; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.fillStyle = INK; ctx.fillRect(-s * 0.32, s * 0.25, s * 0.64, s * 0.6);
+  ctx.restore();
+}
+function drawBall(x, y, s, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+  blob(0, 0, s, s); ctx.fillStyle = PAPER; ctx.fill();
+  ctx.save(); ctx.clip(); ctx.fillStyle = INK; ctx.fillRect(-s, -s * 0.22, s * 2, s * 0.44); ctx.restore();
+  blob(0, 0, s, s); ctx.lineWidth = 3; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.restore();
+}
+function heart(x, y, s) {
+  ctx.beginPath(); ctx.moveTo(x, y + s * 0.35);
+  ctx.bezierCurveTo(x - s, y - s * 0.3, x - s * 0.5, y - s, x, y - s * 0.45);
+  ctx.bezierCurveTo(x + s * 0.5, y - s, x + s, y - s * 0.3, x, y + s * 0.35);
+}
+function star(x, y, s, rot) {
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) { const a = rot + i * Math.PI / 4, rr = i % 2 ? s * 0.35 : s; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
+  ctx.closePath();
+}
+function drawParts(dt) {
+  for (let i = A.parts.length - 1; i >= 0; i--) {
+    const q = A.parts[i]; q.life += dt;
+    if (q.life > q.max) { A.parts.splice(i, 1); continue; }
+    const g = q.kind === 'heart' || q.kind === 'star' ? 40 : 420;
+    q.vy += g * dt; q.x += q.vx * dt * (q.kind === 'heart' ? 0.35 : 1); q.y += q.vy * dt * (q.kind === 'heart' ? 0.5 : 1); q.rot += dt * 3;
+    const a = 1 - q.life / q.max;
+    ctx.globalAlpha = a; ctx.lineWidth = 2; ctx.strokeStyle = INK;
+    if (q.kind === 'heart') { heart(q.x, q.y, 11 * q.s); ctx.fillStyle = INK; ctx.fill(); }
+    else if (q.kind === 'star') { star(q.x, q.y, 10 * q.s, q.rot); ctx.fillStyle = PAPER; ctx.fill(); ctx.stroke(); }
+    else if (q.kind === 'shell') { ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot); ctx.beginPath(); ctx.moveTo(-8 * q.s, 0); ctx.lineTo(0, -9 * q.s); ctx.lineTo(9 * q.s, 2); ctx.closePath(); ctx.fillStyle = PAPER; ctx.fill(); ctx.stroke(); ctx.restore(); }
+    else if (q.kind === 'crumb') { ctx.fillStyle = PAPER; blob(q.x, q.y, 3.5 * q.s, 3 * q.s); ctx.fill(); ctx.lineWidth = 1.5; ctx.stroke(); }
+    else { ctx.fillStyle = 'rgba(17,17,17,.5)'; blob(q.x, q.y, 3 * q.s, 3 * q.s); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+}
+function drawZzz(px, py, r) {
+  ctx.save(); ctx.font = `${Math.round(r * 0.42)}px Jua, sans-serif`; ctx.textAlign = 'center';
+  for (let i = 0; i < 3; i++) {
+    const f = ((A.t * 0.45) + i / 3) % 1;
+    ctx.globalAlpha = Math.sin(f * Math.PI);
+    const x = px + r * 0.9 + f * r * 0.7 + Math.sin(f * 6) * 4, y = py - r * 1.9 - f * r * 1.1, s = 0.7 + f * 0.6;
+    ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+    ctx.lineWidth = 4; ctx.strokeStyle = PAPER; ctx.strokeText('Z', 0, 0); ctx.fillStyle = INK; ctx.fillText('Z', 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+function drawOffscreen(p) {
+  const m = 34;
+  if (p.x > -10 && p.x < W + 10 && p.y > 60 && p.y < H + 40) return null;
+  const cx = W / 2, cy = H / 2; const ang = Math.atan2(p.y - cy, p.x - cx);
+  const ax = clamp(p.x, m, W - m), ay = clamp(p.y, 150, H - 130);
+  ctx.save(); ctx.translate(ax, ay);
+  blob(0, 0, 24, 24); ctx.fillStyle = PAPER; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = INK; ctx.stroke();
+  ctx.rotate(ang); ctx.beginPath(); ctx.moveTo(11, 0); ctx.lineTo(-6, -8); ctx.lineTo(-6, 8); ctx.closePath(); ctx.fillStyle = INK; ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.font = '13px Jua, sans-serif'; ctx.textAlign = 'center'; ctx.lineWidth = 4; ctx.strokeStyle = PAPER;
+  const ty = ay + (ay > H / 2 ? -34 : 42); ctx.strokeText(`${S.name} 여기!`, clamp(ax, 50, W - 50), ty); ctx.fillStyle = INK; ctx.fillText(`${S.name} 여기!`, clamp(ax, 50, W - 50), ty);
+  ctx.restore();
+  return { x: ax, y: ay };
+}
+
+/* ---------- main loop ---------- */
+let lastT = performance.now(), saveAcc = 0, uiAcc = 0, arrow = null;
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now; A.t += dt;
+  // sim
+  tick(dt); saveAcc += dt; uiAcc += dt;
+  if (S.sleeping && S.energy >= 100) { S.sleeping = false; say('푹 잤다! 개운해', 2); syncUI(); }
+  if (uiAcc > 0.5) { uiAcc = 0; syncUI(); }
+  if (saveAcc > 4) { saveAcc = 0; save(); }
+  if (gyro.on) { gyro.dx += (gyro.tx - gyro.dx) * 0.3; gyro.dy += (gyro.ty - gyro.dy) * 0.3; }
+  A.blinkAt -= dt; if (A.blinkAt <= 0) { A.blink = 0.13; A.blinkAt = 2.5 + Math.random() * 3; } if (A.blink > 0) A.blink -= dt;
+  A.wobble = Math.max(0, A.wobble - dt * 2.5); A.squashKick = Math.max(0, A.squashKick - dt * 2.5);
+  A.chomp = Math.max(0, A.chomp - dt); A.flash = Math.max(0, A.flash - dt * 1.6);
+  if (A.jump) { A.jump.t += dt; if (A.jump.t >= A.jump.dur) A.jump = null; }
+
+  // background
+  if (bg.live && video.readyState >= 2 && video.videoWidth) drawCover(video, video.videoWidth, video.videoHeight);
+  else if (bg.img) drawCover(bg.img, bg.img.naturalWidth, bg.img.naturalHeight);
+  else drawFloor();
+  if (S.sleeping) { ctx.fillStyle = 'rgba(17,17,17,.38)'; ctx.fillRect(0, 0, W, H); }
+
+  const body = drawPet();
+  const r = body.r;
+
+  // food
+  for (let i = A.foods.length - 1; i >= 0; i--) {
+    const f = A.foods[i]; const ps = petScreen(); f.target = ps.y - r * 0.9; f.x += (ps.x - f.x) * 0.08;
+    f.vy += 900 * dt; f.y += f.vy * dt;
+    if (f.y >= f.target) { A.foods.splice(i, 1); eat(); continue; }
+    drawOnigiri(f.x, f.y, r * 0.32, f.rot);
+  }
+  // ball
+  if (A.ball) {
+    const b = A.ball; b.t += dt; const ps = petScreen();
+    const ph = (b.t / b.dur) * 3; const k = Math.floor(ph), f = ph % 1, dir = k % 2 ? -1 : 1;
+    const x = ps.x + dir * (-1.7 + f * 3.4) * r, y = ps.y - r * 2.4 - Math.sin(f * Math.PI) * r * 1.6;
+    drawBall(x, y, r * 0.26, b.t * 8 * dir);
+    if (b.t >= b.dur) { A.ball = null; endPlay(); }
+  }
+  if (S.sleeping) drawZzz(body.x, body.y, r);
+  drawParts(dt);
+  arrow = gyro.on ? drawOffscreen(petScreen()) : null;
+
+  // speech bubble
+  if (A.t < speech.until && !arrow) {
+    bubble.style.opacity = 1;
+    const bw = bubble.offsetWidth, bh = bubble.offsetHeight;
+    const bx = clamp(body.x - bw / 2, 8, W - bw - 8);
+    const by = Math.max(8, body.y - r * (S.stage === 3 ? 2.7 : 2.35) - bh - 10);
+    bubble.style.transform = `translate(${bx}px, ${by}px)`;
+  } else bubble.style.opacity = 0;
+
+  $('#flash').style.opacity = A.flash > 0 ? Math.min(1, A.flash) * 0.85 : 0;
+  requestAnimationFrame(frame);
+}
+
+/* ---------- pointer: tap to pet, drag to move ---------- */
+const drag = { active: false, id: null, sx: 0, sy: 0, ox: 0, oy: 0, onPet: false, moved: false };
+function hitPet(x, y) {
+  const p = petScreen(), r = R();
+  const dx = x - p.x, dy = y - (p.y - r);
+  return (dx * dx) / (r * 1.3 * r * 1.3) + (dy * dy) / (r * 1.3 * r * 1.3) <= 1;
+}
+function local(e) { const b = cv.getBoundingClientRect(); return { x: e.clientX - b.left, y: e.clientY - b.top }; }
+cv.addEventListener('pointerdown', e => {
+  const q = local(e);
+  if (arrow && Math.hypot(q.x - arrow.x, q.y - arrow.y) < 34) { // call pet back to center
+    gyro.base = null; gyro.dx = gyro.dy = gyro.tx = gyro.ty = 0; pet.wx = W / 2; pet.wy = H * 0.66;
+    say('나 여기 있어!', 1.6); return;
+  }
+  drag.onPet = hitPet(q.x, q.y);
+  if (!drag.onPet) return;
+  drag.id = e.pointerId; drag.sx = q.x; drag.sy = q.y; drag.moved = false;
+  const p = petScreen(); drag.ox = p.x - q.x; drag.oy = p.y - q.y;
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (e.pointerId !== drag.id) return;
+  const q = local(e);
+  if (!drag.moved && Math.hypot(q.x - drag.sx, q.y - drag.sy) > 8) { drag.moved = true; drag.active = true; cv.classList.add('dragging'); }
+  if (drag.active) {
+    let x = clamp(q.x + drag.ox, 30, W - 30), y = clamp(q.y + drag.oy, H * 0.3, H - 110);
+    if (gyro.on) { x -= gyro.dx * ppd(); y -= gyro.dy * ppd(); }
+    pet.wx = x; pet.wy = y;
+  }
+});
+function endDrag(e) {
+  if (e.pointerId !== drag.id) return;
+  if (!drag.moved && drag.onPet) tapPet();
+  if (drag.active) { syncUI._hintDone = true; syncUI(); }
+  drag.active = false; drag.id = null; cv.classList.remove('dragging');
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+
+/* ---------- buttons ---------- */
+$('#bFeed').addEventListener('click', feed);
+$('#bPlay').addEventListener('click', play);
+$('#bSleep').addEventListener('click', toggleSleep);
+const nameBtn = $('#nameBtn'), nameIn = $('#nameIn');
+nameBtn.addEventListener('click', () => { nameIn.value = S.name; nameBtn.hidden = true; nameIn.hidden = false; nameIn.focus(); nameIn.select(); });
+function commitName() {
+  if (nameIn.hidden) return;
+  const v = nameIn.value.trim(); if (v) S.name = v.slice(0, 10);
+  nameIn.hidden = true; nameBtn.hidden = false; save(); syncUI();
+}
+nameIn.addEventListener('keydown', e => { if (e.key === 'Enter') commitName(); if (e.key === 'Escape') { nameIn.value = S.name; commitName(); } });
+nameIn.addEventListener('blur', commitName);
+
+/* ---------- snapshot ---------- */
+let downloads = null;
+try { if (window.claude && typeof window.claude.use === 'function') window.claude.use('downloads').then(d => { downloads = d; }).catch(() => {}); } catch (e) {}
+const inFrame = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
+$('#bShot').addEventListener('click', async () => {
+  // compose a stamped copy
+  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+  const o = out.getContext('2d'); o.drawImage(cv, 0, 0);
+  const s = DPR; const label = S.stage === 0 ? `${S.name} · 알` : `${S.name} · Lv.${S.level} ${STAGES[S.stage]}`;
+  o.font = `${16 * s}px Jua, sans-serif`; const tw = o.measureText(label).width;
+  o.fillStyle = PAPER; o.strokeStyle = INK; o.lineWidth = 2 * s;
+  const bx = 14 * s, by = out.height - 46 * s, bw = tw + 24 * s, bh = 32 * s;
+  o.beginPath(); o.roundRect ? o.roundRect(bx, by, bw, bh, 16 * s) : o.rect(bx, by, bw, bh); o.fill(); o.stroke();
+  o.fillStyle = INK; o.textBaseline = 'middle'; o.fillText(label, bx + 12 * s, by + bh / 2 + 1 * s);
+  A.flash = 0.7;
+  if (S.stage > 0) { A.happyUntil = A.t + 1.5; say(pick(['브이!', '찰칵!', '잘 나왔어?']), 1.4); }
+  const blob = await new Promise(res => out.toBlob(res, 'image/png'));
+  if (!blob) return;
+  if (downloads) {
+    try { await downloads.save({ filename: `${S.name}-AR.png`, data: blob }); toast('사진을 저장했어요'); return; }
+    catch (err) { if (err && err.code === 'declined') return; }
+  }
+  if (!inFrame) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${S.name}-AR.png`;
+    document.body.appendChild(a); a.click(); a.remove(); toast('사진을 저장했어요'); return;
+  }
+  $('#shotImg').src = URL.createObjectURL(blob); $('#shotSheet').hidden = false;
+});
+$('#closeShot').addEventListener('click', () => $('#shotSheet').hidden = true);
+
+/* ---------- boot ---------- */
+addEventListener('resize', resize);
+document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+addEventListener('pagehide', save);
+resize(); syncUI();
+if (wokeWhileAway) say('푹 잤어! 보고 싶었어', 2.6);
+else if (S.stage > 0) setTimeout(() => say(pick([`${S.name} 왔어!`, '또 왔구나!', '놀아줘!']), 2), 600);
+requestAnimationFrame(t => { lastT = t; requestAnimationFrame(frame); });
+})();
+</script>
+
+</body>
+</html>
